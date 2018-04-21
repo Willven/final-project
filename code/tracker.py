@@ -1,25 +1,37 @@
 import cv2
 import numpy as np
 from scipy.optimize import linear_sum_assignment
+import os.path
 
-from ParticleFilter import ParticleFilter
+from particle_filter import ParticleFilter
 
 
 class Tracker():
     def __init__(self, video, player_detections, line_annotations):
+        """
+        Method initiates a Tracking instance, which is itself used glboally to track all items in the image.
+        :param video: The path to the video used to obtain frames
+        :param player_detections: A handle to the player detection file
+        :param line_annotations: A handle to the line annotation file
+        """
         self.video = cv2.VideoCapture(video)
         self.detection_file = player_detections
         self.line_file = line_annotations
 
         self.PHash = cv2.img_hash_PHash().create()
         self.old_hash = None
-        self.pitch = cv2.resize(cv2.imread('pitch_image.png'), None, fx=0.25, fy=0.25)
+        self.pitch = cv2.resize(cv2.imread(os.path.join(os.path.dirname(__file__), '../res/pitch_image.png')), None, fx=0.25, fy=0.25)
         self.counter = 0
         self.H = None
 
         self.filters = []
 
     def _get_lines(self, frame):
+        """
+        Method used to obtain extract from the images, using preprocessing and a Hough transform.
+        :param frame: The frame used
+        :return: A tuple containing a line mask, as well as an array of the lines
+        """
         hue = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)[:, :, 0]
         vals = np.histogram(hue, bins=180)[0]  # Find most common hue value
 
@@ -51,6 +63,11 @@ class Tracker():
         return final, lines
 
     def _get_equations(self, lines):
+        """
+        Method used to obtain equations from a series of detections, each in the form x1, y2, x2, y2.
+        :param lines: The lines used to extract equations
+        :return: A numpy array containing equations, None if not.
+        """
         if lines is None:
             return None
         out = []
@@ -79,6 +96,12 @@ class Tracker():
             return np.vstack(out)
 
     def _find_intersections(self, lines, is_footage):
+        """
+        Method used to points of intersection between the lines provided.
+        :param lines: The lines used, in footage or pitch format
+        :param is_footage: A flag used when specifying which format the lines are in
+        :return: A numpy array containing a series of points of intersection, or None if none exist.
+        """
         intersections = []
         for i in range(len(lines)):
             for j in range(i, len(lines)):
@@ -114,19 +137,21 @@ class Tracker():
             return np.vstack(intersections)
         return None
 
-    def _draw_points(self, frame, intersections):
-        for [_, _, x, y] in intersections:
-            cv2.circle(frame, (int(x), int(y)), 15, (255, 0, 0), -1)
-        return frame
-
-    def _draw_lines(self, frame, equations, oned=True):
+    def _draw_lines(self, frame, equations, greyscale=True):
+        """
+        Method used to draw overlying lines on the image, based upon the equations provided.
+        :param frame:  The frame to draw equations on
+        :param equations: The equations provided
+        :param greyscale:  A flag used to specify the format of the frame, True if greyscale or False if RGB.
+        :return:
+        """
         if equations is None:
             return frame
         for a, b, c, _, _, _, _ in equations:
             try:
                 p1 = 0, int(-c / b)
                 p2 = 1280, int(-((c + 1280 * a) / b))
-                if oned:
+                if greyscale:
                     cv2.line(frame, p1, p2, 128, 2)
                 else:
                     cv2.line(frame, p1, p2, (0, 255, 0), 4)
@@ -136,6 +161,12 @@ class Tracker():
 
     def _get_pitch_equation(self, line):
         # Useful for debugging purposes
+        """
+        Method used to obtain the pitch equation for the lines provided.
+        :param line: A label specifying the line required.
+        :return: The equation of the requested line, None if an invalid line
+        """
+        # Left for reference
         values = {
             0: 'left_try',
             1: 'left_five',
@@ -186,6 +217,11 @@ class Tracker():
             return (14, 0, 1, -317)
 
     def _get_point_pairs(self, footage_points):
+        """
+        Method used to obtain pairs of points for footage and pitch
+        :param footage_points: A numpy array containing the points found in the footage.
+        :return: A numpy array containing a series of points in the format [footage_x, footage_y, pitch_x, pitch_y]
+        """
         out = []
         if footage_points is not None:
             for t1, t2, x, y in footage_points:
@@ -198,12 +234,22 @@ class Tracker():
         return False, None
 
     def _get_detection_positions(self, detections):
+        """
+        Method used to obtain the centroids of any detections
+        :param detections: An array of bounding box detections
+        :return:
+        """
         out = np.zeros((len(detections), 2))
         for i, (x1, y1, x2, y2) in enumerate(detections):
             out[i] = (x1+x2)/2, (y1+y2)/2
         return out.astype(np.float32)
 
     def _translate_points(self, footage_points):
+        """
+        Method used to translate points from the footage domain to the pitch codomain
+        :param footage_points: A numpy array containing the footage points
+        :return: A numpy array containing the pitch points
+        """
         points = np.zeros((len(footage_points), 2), np.float32)
         for i, r in enumerate(np.insert(footage_points, 2, 1, 1)):
             pprime = self.H @ r
@@ -211,8 +257,13 @@ class Tracker():
             points[i] = pprime
         return points
 
-    def _update_filters(self, changed, points):
-        if changed:
+    def _update_filters(self, scene_changed, points):
+        """
+        Method used to update each indiividual particle filter, using the Hungarian approach
+        :param scene_changed: A boolean flag used to indicate if the scene has changed, True if so.
+        :param points: The points provided to associate with each filter
+        """
+        if scene_changed:
             # Changed scene, so reinitialise the kalman filters
             self.filters = []
 
@@ -255,7 +306,16 @@ class Tracker():
             # Update to new filters
             self.filters = new_filters
 
-    def get_frame(self, add_lines, add_detections, add_translations, add_particles):
+    def get_frame(self, add_lines, add_players, add_translated_points, add_particle_filters):
+        """
+        Method used to obtain a new frame from the Tracker
+        :param add_lines: Boolean flag for adding line detections, True if required.
+        :param add_players: Boolean flag for adding player detections, True if required.
+        :param add_translated_points: Boolean flag for adding points after homography, True if required.
+        :param add_particle_filters: Boolean flag for adding the output from particle filters, True if required.
+        :return: A large tuple containing the pitch image, footage_image, a boolean indicating if the scene has
+                changed, the number of currently tracked players, frame number.
+        """
         ok, frame = self.video.read()
 
         # Check if the frame has changed
@@ -291,7 +351,7 @@ class Tracker():
             dets = np.array(self.detection_file['frame' + str(self.counter)])
             player_points = self._get_detection_positions(dets)
 
-            if add_detections:
+            if add_players:
                 for i in range(len(dets)):
                     cv2.rectangle(frame, (dets[i, 0], dets[i, 1]), (dets[i, 2], dets[i, 3]), (0, 0, 255), 1)
 
@@ -301,11 +361,11 @@ class Tracker():
                 self._update_filters(changed_scene, player_points)
 
             # Draw the overlays
-            if add_particles:
+            if add_particle_filters:
                 for filter in self.filters:
                     filter.draw(tmp)
 
-            if add_translations:
+            if add_translated_points:
                 for x, y in player_points:
                     try:
                         cv2.circle(tmp, (x, y), 3, (255, 0, 255), -1)
