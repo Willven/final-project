@@ -2,10 +2,9 @@ This submission is broken down into two different sections.
 The first section provided within this zip file provides 
 the annotations used in demonstrations, along with the 
 primary source code. If visualisations are all that are 
-required, the program can be run from main.py found at the 
-root of this zip file, as follows:
+required, the program can be run from main.py found within 
+code, itslf at the root of this zip file, as follows:
  - python main.py
-
 
 
 If it is required to generate more data, however, there are 
@@ -35,8 +34,8 @@ can then be found in the following GitHub repository:
 https://github.com/Willven/final-project
 
 With these requirements met, footage annotations can be 
-generated using the gen_data.py script with the following 
-usage:
+generated using the gen_data.py script found at the root 
+of the zip with the following usage:
  - python gen_data.py <video_file> <output_file.h5>
 
 If it would be preferred to generate this model from the 
@@ -46,3 +45,7 @@ contains these annotations. To train the model, we use the
 script provided by keras-retinanet, listed below.
  - python retinanet-train csv labels.csv classes.csv
 
+
+
+
+All footage remains the property of the BBC.
